@@ -864,7 +864,6 @@ public class MockPlayer implements Player {
         //To change body of implemented methods use File | Settings | File Templates.
     }
 
-
     @Override
     public double getEyeHeight() {
         return 0;  //To change body of implemented methods use File | Settings | File Templates.
@@ -1528,37 +1527,39 @@ public class MockPlayer implements Player {
     }
 
     @Override
-    public AdvancementProgress getAdvancementProgress(Advancement advancement) {
-        return null;
+    public AdvancementProgress getAdvancementProgress(Advancement a)
+    {
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
     }
 
     @Override
-    public String getLocale() {
-        return null;
+    public String getLocale()
+    {
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
     }
 
     @Override
-    public Entity getShoulderEntityLeft() {
-        return null;
+    public Entity getShoulderEntityLeft(){
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
     }
 
     @Override
-    public void setShoulderEntityLeft(Entity entity) {
-
+    public void setShoulderEntityLeft(Entity entity){
+        
     }
 
     @Override
-    public Entity getShoulderEntityRight() {
-        return null;
+    public Entity getShoulderEntityRight(){
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
     }
 
     @Override
-    public void setShoulderEntityRight(Entity entity) {
-
+    public void setShoulderEntityRight(Entity entity){
+	
     }
 
     @Override
-    public PistonMoveReaction getPistonMoveReaction() {
-        return null;
+    public PistonMoveReaction getPistonMoveReaction(){
+        return null;  //To change body of implemented methods use File | Settings | File Templates.
     }
 }
