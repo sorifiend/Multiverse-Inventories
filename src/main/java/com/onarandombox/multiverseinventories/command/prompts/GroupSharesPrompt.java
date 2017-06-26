@@ -1,10 +1,10 @@
 package com.onarandombox.multiverseinventories.command.prompts;
 
-import com.onarandombox.multiverseinventories.api.Inventories;
-import com.onarandombox.multiverseinventories.api.profile.WorldGroupProfile;
-import com.onarandombox.multiverseinventories.api.share.Sharable;
-import com.onarandombox.multiverseinventories.api.share.Sharables;
-import com.onarandombox.multiverseinventories.api.share.Shares;
+import com.onarandombox.multiverseinventories.MultiverseInventories;
+import com.onarandombox.multiverseinventories.WorldGroup;
+import com.onarandombox.multiverseinventories.share.Sharable;
+import com.onarandombox.multiverseinventories.share.Sharables;
+import com.onarandombox.multiverseinventories.share.Shares;
 import com.onarandombox.multiverseinventories.locale.Message;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
@@ -13,13 +13,13 @@ import org.bukkit.conversations.Prompt;
 
 class GroupSharesPrompt extends InventoriesPrompt {
 
-    protected final WorldGroupProfile group;
+    protected final WorldGroup group;
     protected final Prompt nextPrompt;
     protected final boolean isCreating;
     protected final Shares shares;
 
-    public GroupSharesPrompt(final Inventories plugin, final CommandSender sender,
-                             final WorldGroupProfile group, final Prompt nextPrompt,
+    public GroupSharesPrompt(final MultiverseInventories plugin, final CommandSender sender,
+                             final WorldGroup group, final Prompt nextPrompt,
                              final boolean creatingGroup) {
         super(plugin, sender);
         this.group = group;

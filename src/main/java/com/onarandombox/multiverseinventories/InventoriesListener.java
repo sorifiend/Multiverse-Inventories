@@ -4,12 +4,10 @@ import com.dumptruckman.minecraft.util.Logging;
 import com.onarandombox.MultiverseCore.api.MultiverseWorld;
 import com.onarandombox.MultiverseCore.event.MVConfigReloadEvent;
 import com.onarandombox.MultiverseCore.event.MVVersionEvent;
-import com.onarandombox.multiverseinventories.api.Inventories;
-import com.onarandombox.multiverseinventories.api.profile.GlobalProfile;
-import com.onarandombox.multiverseinventories.api.profile.PlayerProfile;
-import com.onarandombox.multiverseinventories.api.profile.WorldGroupProfile;
-import com.onarandombox.multiverseinventories.api.profile.WorldProfile;
-import com.onarandombox.multiverseinventories.api.share.Sharables;
+import com.onarandombox.multiverseinventories.profile.GlobalProfile;
+import com.onarandombox.multiverseinventories.profile.PlayerProfile;
+import com.onarandombox.multiverseinventories.profile.container.ProfileContainer;
+import com.onarandombox.multiverseinventories.share.Sharables;
 import me.drayshak.WorldInventories.WorldInventories;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -31,11 +29,11 @@ import java.util.List;
  */
 public class InventoriesListener implements Listener {
 
-    private Inventories inventories;
-    private List<WorldGroupProfile> currentGroups;
+    private MultiverseInventories inventories;
+    private List<WorldGroup> currentGroups;
     private Location spawnLoc = null;
 
-    public InventoriesListener(Inventories inventories) {
+    public InventoriesListener(MultiverseInventories inventories) {
         this.inventories = inventories;
     }
 
@@ -103,10 +101,10 @@ public class InventoriesListener implements Listener {
     public void playerJoin(final PlayerJoinEvent event) {
         final Player player = event.getPlayer();
         final GlobalProfile globalProfile = inventories.getData().getGlobalProfile(player.getName());
-        final String world = globalProfile.getWorld();
+        final String world = globalProfile.getLastWorld();
         if (inventories.getMVIConfig().usingLoggingSaveLoad() && globalProfile.shouldLoadOnLogin()) {
             ShareHandler.updatePlayer(inventories, player, new DefaultPersistingProfile(Sharables.allOf(),
-                    inventories.getWorldManager().getWorldProfile(world).getPlayerData(player)));
+                    inventories.getWorldProfileContainerStore().getContainer(world).getPlayerData(player)));
         }
         inventories.getData().setLoadOnLogin(player.getName(), false);
         verifyCorrectWorld(player, player.getWorld().getName());
@@ -121,24 +119,24 @@ public class InventoriesListener implements Listener {
     public void playerQuit(final PlayerQuitEvent event) {
         final Player player = event.getPlayer();
         final String world = event.getPlayer().getWorld().getName();
-        inventories.getData().updateWorld(player.getName(), world);
+        inventories.getData().updateLastWorld(player.getName(), world);
         if (inventories.getMVIConfig().usingLoggingSaveLoad()) {
             ShareHandler.updateProfile(inventories, player, new DefaultPersistingProfile(Sharables.allOf(),
-                    inventories.getWorldManager().getWorldProfile(world).getPlayerData(player)));
+                    inventories.getWorldProfileContainerStore().getContainer(world).getPlayerData(player)));
             inventories.getData().setLoadOnLogin(player.getName(), true);
         }
     }
 
     private void verifyCorrectWorld(Player player, String world) {
         GlobalProfile globalProfile = inventories.getData().getGlobalProfile(player.getName());
-        if (globalProfile.getWorld() == null) {
-            inventories.getData().updateWorld(player.getName(), world);
+        if (globalProfile.getLastWorld() == null) {
+            inventories.getData().updateLastWorld(player.getName(), world);
         } else {
-            if (!world.equals(globalProfile.getWorld())) {
+            if (!world.equals(globalProfile.getLastWorld())) {
                 Logging.fine("Player did not spawn in the world they were last reported to be in!");
                 new WorldChangeShareHandler(this.inventories, player,
-                        globalProfile.getWorld(), world).handleSharing();
-                inventories.getData().updateWorld(player.getName(), world);
+                        globalProfile.getLastWorld(), world).handleSharing();
+                inventories.getData().updateLastWorld(player.getName(), world);
             }
         }
     }
@@ -181,7 +179,7 @@ public class InventoriesListener implements Listener {
         }
 
         new WorldChangeShareHandler(this.inventories, player, fromWorld.getName(), toWorld.getName()).handleSharing();
-        inventories.getData().updateWorld(player.getName(), toWorld.getName());
+        inventories.getData().updateLastWorld(player.getName(), toWorld.getName());
     }
 
     /**
@@ -199,12 +197,12 @@ public class InventoriesListener implements Listener {
         Player player = event.getPlayer();
         String fromWorldName = event.getFrom().getWorld().getName();
         String toWorldName = event.getTo().getWorld().getName();
-        WorldProfile fromWorldProfile = this.inventories.getWorldManager().getWorldProfile(fromWorldName);
-        PlayerProfile playerProfile = fromWorldProfile.getPlayerData(player);
+        ProfileContainer fromWorldProfileContainer = this.inventories.getWorldProfileContainerStore().getContainer(fromWorldName);
+        PlayerProfile playerProfile = fromWorldProfileContainer.getPlayerData(player);
         playerProfile.set(Sharables.LAST_LOCATION, event.getFrom());
-        List<WorldGroupProfile> fromGroups = this.inventories.getGroupManager().getGroupsForWorld(fromWorldName);
-        for (WorldGroupProfile fromGroup : fromGroups) {
-            playerProfile = fromGroup.getPlayerData(event.getPlayer());
+        List<WorldGroup> fromGroups = this.inventories.getGroupManager().getGroupsForWorld(fromWorldName);
+        for (WorldGroup fromGroup : fromGroups) {
+            playerProfile = fromGroup.getGroupProfileContainer().getPlayerData(event.getPlayer());
             if (fromGroup.containsWorld(toWorldName)) {
                 if (!fromGroup.isSharing(Sharables.LAST_LOCATION)) {
                     playerProfile.set(Sharables.LAST_LOCATION, event.getFrom());
@@ -227,14 +225,14 @@ public class InventoriesListener implements Listener {
     public void playerDeath(PlayerDeathEvent event) {
         Logging.finer("=== Handling PlayerDeathEvent for: " + event.getEntity().getName() + " ===");
         String deathWorld = event.getEntity().getWorld().getName();
-        WorldProfile worldProfile = this.inventories.getWorldManager().getWorldProfile(deathWorld);
-        PlayerProfile profile = worldProfile.getPlayerData(event.getEntity());
+        ProfileContainer worldProfileContainer = this.inventories.getWorldProfileContainerStore().getContainer(deathWorld);
+        PlayerProfile profile = worldProfileContainer.getPlayerData(event.getEntity());
         profile.set(Sharables.LEVEL, event.getNewLevel());
         profile.set(Sharables.EXPERIENCE, (float) event.getNewExp());
         profile.set(Sharables.TOTAL_EXPERIENCE, event.getNewTotalExp());
         this.inventories.getData().updatePlayerData(profile);
-        for (WorldGroupProfile groupProfile : this.inventories.getGroupManager().getGroupsForWorld(deathWorld)) {
-            profile = groupProfile.getPlayerData(event.getEntity());
+        for (WorldGroup worldGroup : this.inventories.getGroupManager().getGroupsForWorld(deathWorld)) {
+            profile = worldGroup.getGroupProfileContainer().getPlayerData(event.getEntity());
             profile.set(Sharables.LEVEL, event.getNewLevel());
             profile.set(Sharables.EXPERIENCE, (float) event.getNewExp());
             profile.set(Sharables.TOTAL_EXPERIENCE, event.getNewTotalExp());
@@ -335,7 +333,7 @@ public class InventoriesListener implements Listener {
     }
 
     private void handleRespawn(PlayerRespawnEvent event, EventPriority priority) {
-        for (WorldGroupProfile group : this.currentGroups) {
+        for (WorldGroup group : this.currentGroups) {
             if (group.getSpawnPriority().equals(priority)) {
                 String spawnWorldName = group.getSpawnWorld();
                 if (spawnWorldName != null) {

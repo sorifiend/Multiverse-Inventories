@@ -1,7 +1,7 @@
 package com.onarandombox.multiverseinventories.command.prompts;
 
-import com.onarandombox.multiverseinventories.api.Inventories;
-import com.onarandombox.multiverseinventories.api.profile.WorldGroupProfile;
+import com.onarandombox.multiverseinventories.MultiverseInventories;
+import com.onarandombox.multiverseinventories.WorldGroup;
 import com.onarandombox.multiverseinventories.locale.Message;
 import org.bukkit.ChatColor;
 import org.bukkit.command.CommandSender;
@@ -10,14 +10,14 @@ import org.bukkit.conversations.Prompt;
 
 class GroupDeletePrompt extends InventoriesPrompt {
 
-    public GroupDeletePrompt(final Inventories plugin, final CommandSender sender) {
+    public GroupDeletePrompt(final MultiverseInventories plugin, final CommandSender sender) {
         super(plugin, sender);
     }
 
     @Override
     public String getPromptText(final ConversationContext conversationContext) {
         final StringBuilder builder = new StringBuilder();
-        for (WorldGroupProfile group : plugin.getGroupManager().getGroups()) {
+        for (WorldGroup group : plugin.getGroupManager().getGroups()) {
             if (builder.length() == 0) {
                 builder.append(ChatColor.WHITE);
             } else {
@@ -30,7 +30,7 @@ class GroupDeletePrompt extends InventoriesPrompt {
 
     @Override
     public Prompt acceptInput(final ConversationContext conversationContext, final String s) {
-        final WorldGroupProfile group = plugin.getGroupManager().getGroup(s);
+        final WorldGroup group = plugin.getGroupManager().getGroup(s);
         if (group == null) {
             messager.normal(Message.ERROR_NO_GROUP, sender, s);
         } else {

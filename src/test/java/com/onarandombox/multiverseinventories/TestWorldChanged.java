@@ -1,12 +1,9 @@
 package com.onarandombox.multiverseinventories;
 
-import com.onarandombox.multiverseinventories.api.DataStrings;
-import com.onarandombox.multiverseinventories.api.profile.ContainerType;
-import com.onarandombox.multiverseinventories.api.profile.WorldGroupProfile;
-import com.onarandombox.multiverseinventories.api.share.Sharables;
-import com.onarandombox.multiverseinventories.api.share.Shares;
+import com.onarandombox.multiverseinventories.profile.container.ContainerType;
+import com.onarandombox.multiverseinventories.share.Sharables;
+import com.onarandombox.multiverseinventories.share.Shares;
 import com.onarandombox.multiverseinventories.util.TestInstanceCreator;
-import com.onarandombox.multiverseinventories.util.data.FlatFileDataHelper;
 import junit.framework.Assert;
 import org.bukkit.Color;
 import org.bukkit.Location;
@@ -258,7 +255,7 @@ public class TestWorldChanged {
     }
 
     @Test
-    public void testGroupedSharesWorldChange() {
+    public void testGroupedSharesWorldChange() throws Exception {
 
         // Initialize a fake command
         Command mockCommand = mock(Command.class);
@@ -372,7 +369,7 @@ public class TestWorldChanged {
         String[] cmdArgs = new String[]{"rmworld", "world2", "default"};
         inventories.onCommand(mockCommandSender, mockCommand, "", cmdArgs);
 
-        WorldGroupProfile group = inventories.getGroupManager().newEmptyGroup("test");
+        WorldGroup group = inventories.getGroupManager().newEmptyGroup("test");
         group.addWorld("world");
         group.addWorld("world_nether");
         group.addWorld("world_the_end");

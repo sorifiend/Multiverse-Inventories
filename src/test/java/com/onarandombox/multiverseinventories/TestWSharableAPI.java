@@ -1,11 +1,10 @@
 package com.onarandombox.multiverseinventories;
 
-import com.onarandombox.multiverseinventories.api.profile.PlayerProfile;
-import com.onarandombox.multiverseinventories.api.profile.WorldGroupProfile;
-import com.onarandombox.multiverseinventories.api.share.ProfileEntry;
-import com.onarandombox.multiverseinventories.api.share.Sharable;
-import com.onarandombox.multiverseinventories.api.share.SharableHandler;
-import com.onarandombox.multiverseinventories.api.share.Sharables;
+import com.onarandombox.multiverseinventories.profile.PlayerProfile;
+import com.onarandombox.multiverseinventories.share.ProfileEntry;
+import com.onarandombox.multiverseinventories.share.Sharable;
+import com.onarandombox.multiverseinventories.share.SharableHandler;
+import com.onarandombox.multiverseinventories.share.Sharables;
 import com.onarandombox.multiverseinventories.util.TestInstanceCreator;
 import junit.framework.Assert;
 import org.bukkit.Location;
@@ -165,7 +164,7 @@ public class TestWSharableAPI {
         String[] cmdArgs = new String[]{"debug", "3"};
         inventories.onCommand(mockCommandSender, mockCoreCommand, "", cmdArgs);
 
-        WorldGroupProfile newGroup = inventories.getGroupManager().newEmptyGroup("test");
+        WorldGroup newGroup = inventories.getGroupManager().newEmptyGroup("test");
         newGroup.getShares().mergeShares(Sharables.allOf());
         newGroup.addWorld("world2");
         newGroup.getShares().remove(OPTIONAL);

@@ -2,15 +2,13 @@ package com.onarandombox.multiverseinventories;
 
 import com.dumptruckman.minecraft.util.Logging;
 import com.onarandombox.MultiverseCore.MultiverseCore;
+import com.onarandombox.MultiverseCore.api.MVPlugin;
 import com.onarandombox.MultiverseCore.commands.HelpCommand;
-import com.onarandombox.multiverseinventories.api.GroupManager;
-import com.onarandombox.multiverseinventories.api.Inventories;
-import com.onarandombox.multiverseinventories.api.InventoriesConfig;
-import com.onarandombox.multiverseinventories.api.profile.PlayerData;
-import com.onarandombox.multiverseinventories.api.profile.ProfileTypeManager;
-import com.onarandombox.multiverseinventories.api.profile.WorldGroupProfile;
-import com.onarandombox.multiverseinventories.api.profile.WorldProfileManager;
-import com.onarandombox.multiverseinventories.api.share.Sharables;
+import com.onarandombox.multiverseinventories.profile.ProfileDataSource;
+import com.onarandombox.multiverseinventories.profile.WorldGroupManager;
+import com.onarandombox.multiverseinventories.profile.container.ContainerType;
+import com.onarandombox.multiverseinventories.profile.container.ProfileContainerStore;
+import com.onarandombox.multiverseinventories.share.Sharables;
 import com.onarandombox.multiverseinventories.command.AddSharesCommand;
 import com.onarandombox.multiverseinventories.command.AddWorldCommand;
 import com.onarandombox.multiverseinventories.command.GroupCommand;
@@ -24,16 +22,15 @@ import com.onarandombox.multiverseinventories.command.SpawnCommand;
 import com.onarandombox.multiverseinventories.command.ToggleCommand;
 import com.onarandombox.multiverseinventories.locale.Message;
 import com.onarandombox.multiverseinventories.locale.Messager;
+import com.onarandombox.multiverseinventories.locale.Messaging;
 import com.onarandombox.multiverseinventories.migration.ImportManager;
 import com.onarandombox.multiverseinventories.util.Perm;
-import com.onarandombox.multiverseinventories.util.data.FlatFilePlayerData;
 import com.pneumaticraft.commandhandler.multiverse.CommandHandler;
 import me.drayshak.WorldInventories.WorldInventories;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.PluginManager;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -49,22 +46,22 @@ import java.util.logging.Level;
 /**
  * Multiverse-Inventories plugin main class.
  */
-public class MultiverseInventories extends JavaPlugin implements Inventories {
+public class MultiverseInventories extends JavaPlugin implements MVPlugin, Messaging {
 
     private final int requiresProtocol = 20;
     private final InventoriesListener inventoriesListener = new InventoriesListener(this);
     private final AdventureListener adventureListener = new AdventureListener(this);
 
     private Messager messager = new DefaultMessager(this);
-    private GroupManager groupManager = null;
-    private WorldProfileManager worldProfileManager = null;
-    private ProfileTypeManager profileTypeManager = null;
+    private WorldGroupManager worldGroupManager = null;
+    private ProfileContainerStore worldProfileContainerStore = null;
+    private ProfileContainerStore groupProfileContainerStore = null;
     private ImportManager importManager = new ImportManager(this);
 
     private CommandHandler commandHandler = null;
     private MultiverseCore core = null;
     private InventoriesConfig config = null;
-    private PlayerData data = null;
+    private ProfileDataSource data = null;
 
     private File serverFolder = new File(System.getProperty("user.dir"));
 
@@ -75,10 +72,10 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
     public void onDisable() {
         for (final Player player : getServer().getOnlinePlayers()) {
             final String world = player.getWorld().getName();
-            //getData().updateWorld(player.getName(), world);
+            //getData().updateLastWorld(player.getName(), world);
             if (getMVIConfig().usingLoggingSaveLoad()) {
                 ShareHandler.updateProfile(this, player, new DefaultPersistingProfile(Sharables.allOf(),
-                        getWorldManager().getWorldProfile(world).getPlayerData(player)));
+                        getWorldProfileContainerStore().getContainer(world).getPlayerData(player)));
                 getData().setLoadOnLogin(player.getName(), true);
             }
         }
@@ -123,10 +120,8 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
             return;
         }
 
-        this.getProfileTypeManager();
-
         // Initialize data class
-        //this.getWorldManager().setWorldProfiles(this.getData().getWorldProfiles());
+        //this.getWorldProfileContainerStore().setWorldProfiles(this.getData().getWorldProfiles());
 
         this.getCore().incrementPluginCount();
 
@@ -134,19 +129,6 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
         Bukkit.getPluginManager().registerEvents(inventoriesListener, this);
         if (Bukkit.getPluginManager().getPlugin("Multiverse-Adventure") != null) {
             Bukkit.getPluginManager().registerEvents(adventureListener, this);
-        }
-
-        try {
-            InventoryType.ENDER_CHEST.getClass();
-            try {
-                Player.class.getMethod("getEnderChest");
-                Logging.fine("Ender chest supported through proper Bukkit and Multiverse-Inventories API!");
-            } catch (NoSuchMethodException ignore) {
-                Bukkit.getPluginManager().registerEvents(new EnderChestListenerEarly1_3_1_RBs(this), this);
-                Logging.fine("Ender chest supported for early releases of Bukkit for MC 1.3.1.");
-            }
-        } catch (NoSuchFieldError ignore) {
-            Logging.fine("No ender chest support for pre MC 1.3!");
         }
 
         // Register Commands
@@ -194,9 +176,8 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
     }
 
     /**
-     * {@inheritDoc}
+     * @return A class used for managing importing data from other similar plugins.
      */
-    @Override
     public ImportManager getImportManager() {
         return this.importManager;
     }
@@ -261,9 +242,8 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
     }
 
     /**
-     * {@inheritDoc}
+     * @return The pastebin version string.
      */
-    @Override
     public String getVersionInfo() {
         StringBuilder builder = new StringBuilder();
         builder.append(this.logAndAddToPasteBinBuffer("Multiverse-Inventories Version: "
@@ -275,7 +255,7 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
         builder.append(this.logAndAddToPasteBinBuffer("Using GameMode Profiles: "
                 + this.getMVIConfig().isUsingGameModeProfiles()));
         builder.append(this.logAndAddToPasteBinBuffer("=== Groups ==="));
-        for (WorldGroupProfile group : this.getGroupManager().getGroups()) {
+        for (WorldGroup group : this.getGroupManager().getGroups()) {
             builder.append(this.logAndAddToPasteBinBuffer(group.toString()));
         }
         return builder.toString();
@@ -287,24 +267,23 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
     }
 
     /**
-     * {@inheritDoc}
+     * @return the Config object which contains settings for this plugin.
      */
-    @Override
     public InventoriesConfig getMVIConfig() {
         return this.config;
     }
 
     /**
-     * {@inheritDoc}
+     * Nulls the config object and reloads a new one, also resetting the world groups in memory.
      */
     @Override
     public void reloadConfig() {
         try {
-            this.config = new YamlInventoriesConfig(this);
-            this.groupManager = new YamlGroupManager(this, new File(getDataFolder(), "groups.yml"),
-                    ((YamlInventoriesConfig) config).getConfig());
-            this.worldProfileManager = new WeakWorldProfileManager(this);
-            this.profileTypeManager = new DefaultProfileTypeManager(new File(this.getDataFolder(), "profiles.yml"));
+            this.config = new InventoriesConfig(this);
+            this.worldGroupManager = new YamlWorldGroupManager(this, new File(getDataFolder(), "groups.yml"),
+                    ((InventoriesConfig) config).getConfig());
+            this.worldProfileContainerStore = new WeakProfileContainerStore(this, ContainerType.WORLD);
+            this.groupProfileContainerStore = new WeakProfileContainerStore(this, ContainerType.GROUP);
             //this.data = null;
             Logging.fine("Loaded config file!");
         } catch (IOException e) {  // Catch errors loading the config file and exit out if found.
@@ -313,9 +292,6 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
             Bukkit.getPluginManager().disablePlugin(this);
             return;
         }
-
-        ProfileTypes.resetProfileTypes();
-        this.getProfileTypeManager();
 
         this.getServer().getScheduler().scheduleSyncDelayedTask(this, new Runnable() {
             @Override
@@ -333,14 +309,13 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
     }
 
     /**
-     * {@inheritDoc}
+     * @return the PlayerData object which contains data for this plugin.
      */
-    @Override
-    public PlayerData getData() {
+    public ProfileDataSource getData() {
         if (this.data == null) {
             // Loads the data
             try {
-                this.data = new FlatFilePlayerData(this);
+                this.data = new FlatFileProfileDataSource(this);
             } catch (IOException e) {  // Catch errors loading the language file and exit out if found.
                 Logging.severe(this.getMessager().getMessage(Message.ERROR_DATA_LOAD));
                 Logging.severe(e.getMessage());
@@ -371,54 +346,58 @@ public class MultiverseInventories extends JavaPlugin implements Inventories {
     }
 
     /**
-     * {@inheritDoc}
+     * @return The required protocol version of core.
      */
-    @Override
     public int getRequiredProtocol() {
         return this.requiresProtocol;
     }
 
     /**
-     * {@inheritDoc}
+     * @return The World Group manager for this plugin.
      */
-    @Override
-    public GroupManager getGroupManager() {
-        return this.groupManager;
+    public WorldGroupManager getGroupManager() {
+        return this.worldGroupManager;
     }
 
     /**
-     * {@inheritDoc}
+     * Returns the world profile container store for this plugin.
+     * <p>Player profiles for an individual world can be found here.</p>
+     *
+     * @return the world profile container store for this plugin.
      */
-    @Override
-    public WorldProfileManager getWorldManager() {
-        return this.worldProfileManager;
+    public ProfileContainerStore getWorldProfileContainerStore() {
+        return worldProfileContainerStore;
     }
 
     /**
-     * {@inheritDoc}
+     * Returns the group profile container store for this plugin.
+     * <p>Player profiles for a world group can be found here.</p>
+     *
+     * @return the group profile container store for this plugin.
      */
-    @Override
+    public ProfileContainerStore getGroupProfileContainerStore() {
+        return groupProfileContainerStore;
+    }
+
+    /**
+     * Gets the server's root-folder as {@link File}.
+     *
+     * @return The server's root-folder
+     */
     public File getServerFolder() {
         return serverFolder;
     }
 
     /**
-     * {@inheritDoc}
+     * Sets this server's root-folder.
+     *
+     * @param newServerFolder The new server-root
      */
-    @Override
     public void setServerFolder(File newServerFolder) {
         if (!newServerFolder.isDirectory()) {
             throw new IllegalArgumentException("That's not a folder!");
         }
         this.serverFolder = newServerFolder;
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public ProfileTypeManager getProfileTypeManager() {
-        return profileTypeManager;
     }
 }
 
