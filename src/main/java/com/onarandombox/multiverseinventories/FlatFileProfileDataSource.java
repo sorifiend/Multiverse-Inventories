@@ -2,7 +2,10 @@ package com.onarandombox.multiverseinventories;
 
 import com.dumptruckman.bukkit.configuration.json.JsonConfiguration;
 import com.dumptruckman.minecraft.util.Logging;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.onarandombox.multiverseinventories.profile.ProfileDataSource;
+import com.onarandombox.multiverseinventories.profile.ProfileKey;
 import com.onarandombox.multiverseinventories.profile.ProfileTypes;
 import com.onarandombox.multiverseinventories.share.ProfileEntry;
 import com.onarandombox.multiverseinventories.share.Sharable;
@@ -12,6 +15,7 @@ import com.onarandombox.multiverseinventories.profile.GlobalProfile;
 import com.onarandombox.multiverseinventories.profile.PlayerProfile;
 import com.onarandombox.multiverseinventories.profile.ProfileType;
 import net.minidev.json.JSONObject;
+import org.bukkit.Bukkit;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.json.simple.parser.JSONParser;
@@ -22,8 +26,13 @@ import java.io.UnsupportedEncodingException;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
 class FlatFileProfileDataSource implements ProfileDataSource {
@@ -32,10 +41,21 @@ class FlatFileProfileDataSource implements ProfileDataSource {
 
     private final JSONParser JSON_PARSER = new JSONParser();
 
+    private final ExecutorService fileIOExecutorService = Executors.newSingleThreadExecutor();
+
+    // TODO these probably need configurable max sizes
+    private final Cache<ProfileKey, PlayerProfile> profileCache = CacheBuilder.newBuilder()
+            .expireAfterAccess(10, TimeUnit.MINUTES)
+            .maximumSize(1000)
+            .build();
+    private final Cache<UUID, GlobalProfile> globalProfileCache = CacheBuilder.newBuilder()
+            .expireAfterAccess(10, TimeUnit.MINUTES)
+            .maximumSize(500)
+            .build();
+
     private final File worldFolder;
     private final File groupFolder;
     private final File playerFolder;
-    private final FileWriteThread fileWriteThread;
 
     FlatFileProfileDataSource(MultiverseInventories plugin) throws IOException {
         // Make the data folders
@@ -60,15 +80,37 @@ class FlatFileProfileDataSource implements ProfileDataSource {
                 throw new IOException("Could not create player folder!");
             }
         }
-        fileWriteThread = new FileWriteThread();
-        fileWriteThread.start();
     }
 
-    private FileConfiguration getConfigHandle(File file) {
+    private FileConfiguration waitForConfigHandle(File file) {
+        Future<FileConfiguration> future = fileIOExecutorService.submit(new ConfigLoader(file));
+        while (true) {
+            try {
+                return future.get();
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private static FileConfiguration getConfigHandleNow(File file) {
         try {
             return JsonConfiguration.loadConfiguration(file, "UTF-8");
         } catch (UnsupportedEncodingException e) {
             return JsonConfiguration.loadConfiguration(file);
+        }
+    }
+
+    private static class ConfigLoader implements Callable<FileConfiguration> {
+        private final File file;
+
+        private ConfigLoader(File file) {
+            this.file = file;
+        }
+
+        @Override
+        public FileConfiguration call() throws Exception {
+            return getConfigHandleNow(file);
         }
     }
 
@@ -119,63 +161,39 @@ class FlatFileProfileDataSource implements ProfileDataSource {
     /**
      * Retrieves the data file for a player for their global data, creating it if necessary.
      *
-     * @param playerName The name of the player.
+     * @param fileName The name of the file (player name or UUID) without extension.
+     * @param createIfMissing If true, the file will be created it it does not exist.
      * @return The data file for a player.
      * @throws IOException if there was a problem creating the file.
      */
-    File getGlobalFile(String playerName) throws IOException {
-        File jsonPlayerFile = new File(playerFolder, playerName + JSON);
-        if (!jsonPlayerFile.exists()) {
+    File getGlobalFile(String fileName, boolean createIfMissing) throws IOException {
+        File jsonPlayerFile = new File(playerFolder, fileName + JSON);
+        if (createIfMissing && !jsonPlayerFile.exists()) {
             try {
                 jsonPlayerFile.createNewFile();
             } catch (IOException e) {
                 throw new IOException("Could not create necessary player file: " + jsonPlayerFile.getPath() + ". "
-                        + "There may be issues with " + playerName + "'s metadata", e);
+                        + "There may be issues with " + fileName + "'s metadata", e);
             }
         }
         return jsonPlayerFile;
     }
 
-    private class FileWriteThread extends Thread {
+    private void queueWrite(PlayerProfile profile) {
+        fileIOExecutorService.submit(new FileWriter(profile.clone()));
+    }
 
-        FileWriteThread() {
-            super("MV-Inv Profile Write Thread");
+    private class FileWriter implements Callable<Void> {
+        private final PlayerProfile profile;
+
+        private FileWriter(PlayerProfile profile) {
+            this.profile = profile;
         }
-
-        private final BlockingQueue<PlayerProfile> profileWriteQueue = new LinkedBlockingQueue<PlayerProfile>();
-        private final BlockingQueue<PlayerProfile> waitingQueue = new LinkedBlockingQueue<PlayerProfile>();
-        
-        private volatile boolean waiting = false;
 
         @Override
-        public void run() {
-            while(true) {
-                try {
-                    final PlayerProfile profile = profileWriteQueue.take();
-                    processProfileWrite(profile);
-                } catch (InterruptedException ignore) { }
-            }
-        }
-
-        void queue(final PlayerProfile profile) {
-            try {
-                final PlayerProfile clonedProfile = profile.clone();
-                if (waiting) {
-                    waitingQueue.add(clonedProfile);
-                } else {
-                    profileWriteQueue.add(clonedProfile);
-                }
-            } catch (CloneNotSupportedException e) {
-                e.printStackTrace();
-            }
-        }
-
-        void waitUntilEmpty() {
-            waiting = true;
-            while(!profileWriteQueue.isEmpty()) { }
-            waiting = false;
-            profileWriteQueue.addAll(waitingQueue);
-            waitingQueue.clear();
+        public Void call() throws Exception {
+            processProfileWrite(profile);
+            return null;
         }
     }
 
@@ -183,7 +201,7 @@ class FlatFileProfileDataSource implements ProfileDataSource {
         try {
             File playerFile = this.getPlayerFile(playerProfile.getContainerType(),
                     playerProfile.getContainerName(), playerProfile.getPlayer().getName());
-            FileConfiguration playerData = this.getConfigHandle(playerFile);
+            FileConfiguration playerData = getConfigHandleNow(playerFile);
             playerData.createSection(playerProfile.getProfileType().getName(), serializePlayerProfile(playerProfile));
             try {
                 playerData.save(playerFile);
@@ -226,44 +244,50 @@ class FlatFileProfileDataSource implements ProfileDataSource {
      */
     @Override
     public void updatePlayerData(PlayerProfile playerProfile) {
-        fileWriteThread.queue(playerProfile);
+        queueWrite(playerProfile);
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public PlayerProfile getPlayerData(ContainerType containerType, String dataName, ProfileType profileType, String playerName) {
-        fileWriteThread.waitUntilEmpty();
+    private PlayerProfile getPlayerData(ProfileKey key) {
+        PlayerProfile cached = profileCache.getIfPresent(key);
+        if (cached != null) {
+            return cached;
+        }
         File playerFile = null;
         try {
-            playerFile = getPlayerFile(containerType, dataName, playerName);
+            playerFile = getPlayerFile(key.getContainerType(), key.getDataName(), key.getPlayerName());
         } catch (IOException e) {
             e.printStackTrace();
             // Return an empty profile
-            return PlayerProfile.createPlayerProfile(containerType, dataName, profileType, playerName);
+            return PlayerProfile.createPlayerProfile(key.getContainerType(), key.getDataName(), key.getProfileType(),
+                    Bukkit.getOfflinePlayer(key.getPlayerUUID()));
         }
-        FileConfiguration playerData = this.getConfigHandle(playerFile);
+        FileConfiguration playerData = this.waitForConfigHandle(playerFile);
         if (convertConfig(playerData)) {
             try {
                 playerData.save(playerFile);
             } catch (IOException e) {
-                Logging.severe("Could not save data for player: " + playerName
-                        + " for " + containerType.toString() + ": " + dataName + " after conversion.");
+                Logging.severe("Could not save data for player: " + key.getPlayerName()
+                        + " for " + key.getContainerType().toString() + ": " + key.getDataName() + " after conversion.");
                 Logging.severe(e.getMessage());
             }
         }
-        ConfigurationSection section = playerData.getConfigurationSection(profileType.getName());
+        ConfigurationSection section = playerData.getConfigurationSection(key.getProfileType().getName());
         if (section == null) {
-            section = playerData.createSection(profileType.getName());
+            section = playerData.createSection(key.getProfileType().getName());
         }
-        return deserializePlayerProfile(containerType, dataName, profileType, playerName, convertSection(section));
+        PlayerProfile result = deserializePlayerProfile(key, convertSection(section));
+        profileCache.put(key, result);
+        return result;
     }
 
-    private PlayerProfile deserializePlayerProfile(ContainerType containerType, String containerName,
-                                                          ProfileType profileType, String playerName, Map playerData) {
-        PlayerProfile profile = PlayerProfile.createPlayerProfile(containerType, containerName,
-                profileType, playerName);
+    @Override
+    public PlayerProfile getPlayerData(ContainerType containerType, String dataName, ProfileType profileType, UUID playerUUID) {
+        return getPlayerData(ProfileKey.createProfileKey(containerType, dataName, profileType, playerUUID));
+    }
+
+    private PlayerProfile deserializePlayerProfile(ProfileKey pKey, Map playerData) {
+        PlayerProfile profile = PlayerProfile.createPlayerProfile(pKey.getContainerType(), pKey.getDataName(),
+                pKey.getProfileType(), Bukkit.getOfflinePlayer(pKey.getPlayerUUID()));
         for (Object keyObj : playerData.keySet()) {
             String key = keyObj.toString();
             if (key.equalsIgnoreCase(DataStrings.PLAYER_STATS)) {
@@ -274,12 +298,12 @@ class FlatFileProfileDataSource implements ProfileDataSource {
                     if (statsObject instanceof Map) {
                         parsePlayerStatsIntoProfile((Map) statsObject, profile);
                     } else {
-                        Logging.warning("Could not parse stats for " + playerName);
+                        Logging.warning("Could not parse stats for " + pKey.getPlayerName());
                     }
                 }
             } else {
                 if (playerData.get(key) == null) {
-                    Logging.fine("Player data '" + key + "' is null for: " + playerName);
+                    Logging.fine("Player data '" + key + "' is null for: " + pKey.getPlayerName());
                     continue;
                 }
                 try {
@@ -296,7 +320,7 @@ class FlatFileProfileDataSource implements ProfileDataSource {
                 }
             }
         }
-        Logging.finer("Created player profile from map for '" + playerName + "'.");
+        Logging.finer("Created player profile from map for '" + pKey.getPlayerName() + "'.");
         return profile;
     }
 
@@ -373,7 +397,7 @@ class FlatFileProfileDataSource implements ProfileDataSource {
                         + " " + dataName + " but the file did not exist.");
                 return false;
             }
-            FileConfiguration playerData = this.getConfigHandle(playerFile);
+            FileConfiguration playerData = this.waitForConfigHandle(playerFile);
             playerData.set(profileType.getName(), null);
             try {
                 playerData.save(playerFile);
@@ -400,34 +424,73 @@ class FlatFileProfileDataSource implements ProfileDataSource {
         return resultMap;
     }
 
-    /**
-     * {@inheritDoc}
-     */
     @Override
+    @Deprecated
     public GlobalProfile getGlobalProfile(String playerName) {
-        // TODO use data caching to avoid excess object creation.
+        return getGlobalProfile(playerName, Bukkit.getOfflinePlayer(playerName).getUniqueId());
+    }
+
+    @Override
+    public GlobalProfile getGlobalProfile(String playerName, UUID playerUUID) {
+        GlobalProfile cached = globalProfileCache.getIfPresent(playerUUID);
+        if (cached != null) {
+            return cached;
+        }
         File playerFile;
+
+        // Migrate old data if necessary
         try {
-            playerFile = getGlobalFile(playerName);
+            playerFile = getGlobalFile(playerName, false);
         } catch (IOException e) {
+            // This won't ever happen
             e.printStackTrace();
             return GlobalProfile.createGlobalProfile(playerName);
         }
-        FileConfiguration playerData = this.getConfigHandle(playerFile);
+        if (playerFile.exists()) {
+            GlobalProfile profile = loadGlobalProfile(playerFile, playerName, playerUUID);
+            if (!migrateGlobalProfileToUUID(profile, playerFile)) {
+                Logging.warning("Could not properly migrate player global data file for " + playerName);
+            }
+            globalProfileCache.put(playerUUID, profile);
+            return profile;
+        }
+
+        // Load current format
+        try {
+            playerFile = getGlobalFile(playerUUID.toString(), true);
+        } catch (IOException e) {
+            e.printStackTrace();
+            return GlobalProfile.createGlobalProfile(playerName, playerUUID);
+        }
+        GlobalProfile profile = loadGlobalProfile(playerFile, playerName, playerUUID);
+        globalProfileCache.put(playerUUID, profile);
+        return profile;
+    }
+
+    private boolean migrateGlobalProfileToUUID(GlobalProfile profile, File playerFile) {
+        updateGlobalProfile(profile);
+        return playerFile.delete();
+    }
+
+    private GlobalProfile loadGlobalProfile(File playerFile, String playerName, UUID playerUUID) {
+        FileConfiguration playerData = this.waitForConfigHandle(playerFile);
         ConfigurationSection section = playerData.getConfigurationSection("playerData");
         if (section == null) {
             section = playerData.createSection("playerData");
         }
-        return deserializeGlobalProfile(playerName, convertSection(section));
+        return deserializeGlobalProfile(playerName, playerUUID, convertSection(section));
     }
 
-    private GlobalProfile deserializeGlobalProfile(String playerName, Map<String, Object> playerData) {
-        GlobalProfile globalProfile = GlobalProfile.createGlobalProfile(playerName);
+    private GlobalProfile deserializeGlobalProfile(String playerName, UUID playerUUID,
+                                                   Map<String, Object> playerData) {
+        GlobalProfile globalProfile = GlobalProfile.createGlobalProfile(playerName, playerUUID);
         for (String key : playerData.keySet()) {
             if (key.equalsIgnoreCase(DataStrings.PLAYER_LAST_WORLD)) {
                 globalProfile.setLastWorld(playerData.get(key).toString());
             } else if (key.equalsIgnoreCase(DataStrings.PLAYER_SHOULD_LOAD)) {
                 globalProfile.setLoadOnLogin(Boolean.valueOf(playerData.get(key).toString()));
+            } else if (key.equalsIgnoreCase(DataStrings.PLAYER_LAST_KNOWN_NAME)) {
+                globalProfile.setLastKnownName(playerData.get(key).toString());
             }
         }
         return globalProfile;
@@ -440,12 +503,12 @@ class FlatFileProfileDataSource implements ProfileDataSource {
     public boolean updateGlobalProfile(GlobalProfile globalProfile) {
         File playerFile = null;
         try {
-            playerFile = this.getGlobalFile(globalProfile.getPlayerName());
+            playerFile = this.getGlobalFile(globalProfile.getPlayerUUID().toString(), true);
         } catch (IOException e) {
             e.printStackTrace();
             return false;
         }
-        FileConfiguration playerData = this.getConfigHandle(playerFile);
+        FileConfiguration playerData = this.waitForConfigHandle(playerFile);
         playerData.createSection("playerData", serializeGlobalProfile(globalProfile));
         try {
             playerData.save(playerFile);
@@ -463,10 +526,13 @@ class FlatFileProfileDataSource implements ProfileDataSource {
             result.put(DataStrings.PLAYER_LAST_WORLD, profile.getLastWorld());
         }
         result.put(DataStrings.PLAYER_SHOULD_LOAD, profile.shouldLoadOnLogin());
+        result.put(DataStrings.PLAYER_LAST_KNOWN_NAME, profile.getLastKnownName());
         return result;
     }
 
     @Override
+    @Deprecated
+    // TODO replace for UUID
     public void updateLastWorld(String playerName, String worldName) {
         GlobalProfile globalProfile = getGlobalProfile(playerName);
         globalProfile.setLastWorld(worldName);
@@ -474,10 +540,51 @@ class FlatFileProfileDataSource implements ProfileDataSource {
     }
 
     @Override
+    @Deprecated
+    // TODO replace for UUID
     public void setLoadOnLogin(final String playerName, final boolean loadOnLogin) {
         final GlobalProfile globalProfile = getGlobalProfile(playerName);
         globalProfile.setLoadOnLogin(loadOnLogin);
         updateGlobalProfile(globalProfile);
+    }
+
+    @Override
+    public void migratePlayerData(String oldName, String newName, UUID uuid, boolean removeOldData) throws IOException {
+        File[] worldFolders = worldFolder.listFiles(File::isDirectory);
+        if (worldFolders == null) {
+            throw new IOException("Could not enumerate world folders");
+        }
+        File[] groupFolders = groupFolder.listFiles(File::isDirectory);
+        if (groupFolders == null) {
+            throw new IOException("Could not enumerate group folders");
+        }
+
+        for (File worldFolder : worldFolders) {
+            ProfileKey key = ProfileKey.createProfileKey(ContainerType.WORLD, worldFolder.getName(),
+                    ProfileTypes.ADVENTURE, uuid, oldName);
+            updatePlayerData(getPlayerData(key));
+            updatePlayerData(getPlayerData(ProfileKey.createProfileKey(key, ProfileTypes.CREATIVE)));
+            updatePlayerData(getPlayerData(ProfileKey.createProfileKey(key, ProfileTypes.SURVIVAL)));
+        }
+        for (File groupFolder : groupFolders) {
+            ProfileKey key = ProfileKey.createProfileKey(ContainerType.WORLD, groupFolder.getName(),
+                    ProfileTypes.ADVENTURE, uuid, oldName);
+            updatePlayerData(getPlayerData(key));
+            updatePlayerData(getPlayerData(ProfileKey.createProfileKey(key, ProfileTypes.CREATIVE)));
+            updatePlayerData(getPlayerData(ProfileKey.createProfileKey(key, ProfileTypes.SURVIVAL)));
+        }
+        if (removeOldData) {
+            for (File worldFolder : worldFolders) {
+                removePlayerData(ContainerType.WORLD, worldFolder.getName(), ProfileTypes.ADVENTURE, oldName);
+                removePlayerData(ContainerType.WORLD, worldFolder.getName(), ProfileTypes.CREATIVE, oldName);
+                removePlayerData(ContainerType.WORLD, worldFolder.getName(), ProfileTypes.SURVIVAL, oldName);
+            }
+            for (File groupFolder : groupFolders) {
+                removePlayerData(ContainerType.GROUP, groupFolder.getName(), ProfileTypes.ADVENTURE, oldName);
+                removePlayerData(ContainerType.GROUP, groupFolder.getName(), ProfileTypes.CREATIVE, oldName);
+                removePlayerData(ContainerType.GROUP, groupFolder.getName(), ProfileTypes.SURVIVAL, oldName);
+            }
+        }
     }
 }
 
